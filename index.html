@@ -12,7 +12,7 @@
         <h1 class="text-2xl font-bold text-center text-blue-400">The Remote Hands</h1>
 
         <div class="relative w-full aspect-video bg-black rounded-lg overflow-hidden">
-            <video id="videoElement" autoplay playsinline class="w-full h-full object-cover"></video>
+            <video id="videoElement" autoplay playsinline muted class="w-full h-full object-cover"></video>
         </div>
 
         <canvas id="canvasElement" class="hidden"></canvas>
@@ -115,6 +115,7 @@
             } catch (err) {
                 console.error("Error accessing media devices.", err);
                 statusText.innerText = "Error accessing camera/mic.";
+                alert(`Camera/Mic Error: ${err.name} - ${err.message}`);
             }
         }
 
