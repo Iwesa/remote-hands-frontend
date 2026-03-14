@@ -46,7 +46,7 @@
         async function startSession() {
             try {
                 // 1. Connect to the FastAPI WebSocket
-                ws = new WebSocket("ws://remote-hands-backend-920423859996.us-central1.run.app");
+                ws = new WebSocket("wss://remote-hands-backend-920423859996.us-central1.run.app");
 
                 ws.onopen = () => {
                     statusText.innerText = "Connected to Gemini Live";
