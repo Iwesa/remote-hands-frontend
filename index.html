@@ -68,7 +68,7 @@
 
                 // 2. Request Camera & Mic permissions
                 const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: "environment" }, // Prioritize rear camera for "Remote Hands"
+                    video: true, // Prioritize rear camera for "Remote Hands"
                     audio: true 
                 });
 
