@@ -65,6 +65,10 @@
                     //     realtime_input: "Hello! I just connected. Please introduce yourself out loud and tell me you are ready to troubleshoot my surveying equipment"
                     // }))
                 };
+
+                ws.onclose = () => {
+                    statusText.innerText = "Call Dropped (Server Disconnected)";
+                };
                 
                 // Handle incoming audio from Gemini (Conceptual playback)
                 ws.onmessage = async (event) => {
