@@ -46,9 +46,6 @@
 
         async function startSession() {
             try {
-                // 1. Connect to the FastAPI WebSocket
-                ws = new WebSocket("wss://remote-hands-backend-920423859996.us-central1.run.app/ws");
-
                 // Initialize Audio Context when session starts
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 24000});
 
@@ -56,6 +53,8 @@
                     await audioCtx.resume();
                 }
 
+                // 1. Connect to the FastAPI WebSocket
+                ws = new WebSocket("wss://remote-hands-backend-920423859996.us-central1.run.app/ws");
 
                 ws.onopen = () => {
                     statusText.innerText = "Connected to Gemini Live";
@@ -71,33 +70,37 @@
                 
                 // Handle incoming audio from Gemini (Conceptual playback)
                 ws.onmessage = async (event) => {
-                    const message = JSON.parse(event.data);
+                    try {
+                        const message = JSON.parse(event.data);
 
-                    if (message.type === 'audio'){
-                        // Decode base64 to raw bytes
-                        const binaryString = window.atob(message.data);
-                        const len = binaryString.length;
-                        const bytes = new Uint8Array(len);
-                        for (let i = 0; i < len; i++) {
-                            bytes[i] = binaryString.charCodeAt(i);
+                        if (message.type === 'audio'){
+                            // Decode base64 to raw bytes
+                            const binaryString = window.atob(message.data);
+                            const len = binaryString.length;
+                            const bytes = new Uint8Array(len);
+                            for (let i = 0; i < len; i++) {
+                                bytes[i] = binaryString.charCodeAt(i);
+                            }
+    
+                            // Convert 16-bit PCM to Float32 for the Web Audio API
+                            const bufferLength = Math.floor(len / 2);
+                            const buffer = new Int16Array(bytes.buffer, 0, bufferLength);
+                            const audioBuffer = audioCtx.createBuffer(1, buffer.length, 24000);
+                            const channelData = audioBuffer.getChannelData(0);
+                            for (let i = 0; i < buffer.length; i++){
+                                channelData[i] = buffer[i] / 32768.0;
+                            }
+    
+                            // Play it out loud
+                            const source = audioCtx.createBufferSource();
+                            source.buffer = audioBuffer;
+                            source.connect(audioCtx.destination);
+                            source.start();
+                        } else if (message.type === 'status') {
+                            document.getElementById('status').innerText = message.data;
                         }
-
-                        // Convert 16-bit PCM to Float32 for the Web Audio API
-                        const bufferLength = Math.floor(len / 2);
-                        const buffer = new Int16Array(bytes.buffer, 0, bufferLength);
-                        const audioBuffer = audioCtx.createBuffer(1, buffer.length, 24000);
-                        const channelData = audioBuffer.getChannelData(0);
-                        for (let i = 0; i < buffer.length; i++){
-                            channelData[i] = buffer[i] / 32768.0;
-                        }
-
-                        // Play it out loud
-                        const source = audioCtx.createBufferSource();
-                        source.buffer = audioBuffer;
-                        source.connect(audioCtx.destination);
-                        source.start();
-                    } else if (message.type === 'status') {
-                        document.getElementById('status').innerText = message.data;
+                    } catch (err) {
+                        statusText.innerText = `Audio Error: ${err.message}`
                     }
                 };
 
