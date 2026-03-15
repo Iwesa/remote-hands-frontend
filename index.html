@@ -47,29 +47,29 @@
         let mediaRecorder = null;
         let videoInterval = null;
         let nextPlayTime = 0;
+        let micProcessor = null;
+        let micSource = null;
 
-        // Force Rear Camera ("environment")
         async function setupCamera() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ 
                     video: { facingMode: "environment", width: 640, height: 480 },
-                    audio: false // Handled separately
+                    audio: false
                 });
                 videoElement.srcObject = stream;
             } catch (err) {
-                statusText.innerText = "Camera access denied or unavailable";
+                statusText.innerText = "Camera access denied";
                 statusText.classList.replace('text-green-400', 'text-red-400');
             }
         }
 
         async function startSession() {
             try {
-                // 1. Wake up audio instantly to bypass mobile browser blocks
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                // Gemini natively outputs at 24000Hz. Match it for perfect playback!
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
                 await audioCtx.resume();
                 nextPlayTime = 0;
 
-                // 2. Connect to the fully-fixed Python Backend (Update URL if needed!)
                 ws = new WebSocket("wss://remote-hands-backend-920423859996.us-central1.run.app/ws");
 
                 ws.onopen = async () => {
@@ -79,56 +79,37 @@
                     startBtn.classList.add('opacity-50', 'cursor-not-allowed');
                     stopBtn.classList.remove('opacity-50', 'cursor-not-allowed');
 
-                    // 3. Start capturing microphone (True 16kHz PCM)
-                    const audioStream = await navigator.mediaDevices.getUserMedia({ 
-                        audio: { channelCount: 1, sampleRate: 16000 } 
-                    });
+                    // Capture mic at the phone's NATIVE rate (don't force 16k, let the browser decide)
+                    const audioStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
+                    const micAudioCtx = new AudioContext(); 
+                    const actualRate = micAudioCtx.sampleRate; // Grab the true hardware rate
                     
-                    // Create a separate context to process the microphone input
-                    const micAudioCtx = new AudioContext({ sampleRate: 16000 });
-                    const source = micAudioCtx.createMediaStreamSource(audioStream);
+                    micSource = micAudioCtx.createMediaStreamSource(audioStream);
+                    micProcessor = micAudioCtx.createScriptProcessor(4096, 1, 1);
+                    micSource.connect(micProcessor);
+                    micProcessor.connect(micAudioCtx.destination);
                     
-                    // Manually intercept the audio nodes to get raw data
-                    const processor = micAudioCtx.createScriptProcessor(4096, 1, 1);
-                    source.connect(processor);
-                    processor.connect(micAudioCtx.destination);
-                    
-                    processor.onaudioprocess = (e) => {
+                    micProcessor.onaudioprocess = (e) => {
                         if (ws.readyState === WebSocket.OPEN) {
                             const inputData = e.inputBuffer.getChannelData(0);
                             const pcm16 = new Int16Array(inputData.length);
-                            
-                            // Convert browser's Float32 audio to Gemini's required Int16 audio
                             for (let i = 0; i < inputData.length; i++) {
                                 let s = Math.max(-1, Math.min(1, inputData[i]));
                                 pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
                             }
                             
-                            // Convert raw Int16 bytes to Base64 to send to Python
                             const uint8 = new Uint8Array(pcm16.buffer);
                             let binary = '';
-                            for (let i = 0; i < uint8.byteLength; i++) {
-                                binary += String.fromCharCode(uint8[i]);
+                            // Chunked base64 processing to prevent stack overflows on mobile
+                            for (let i = 0; i < uint8.byteLength; i+=1024) {
+                                binary += String.fromCharCode.apply(null, uint8.subarray(i, i+1024));
                             }
                             
-                            ws.send(JSON.stringify({ type: "audio", data: window.btoa(binary) }));
+                            // Send the exact hardware sample rate to Python!
+                            ws.send(JSON.stringify({ type: "audio", rate: actualRate, data: window.btoa(binary) }));
                         }
                     };
-                    
-                    mediaRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm;codecs=opus' });
-                    mediaRecorder.ondataavailable = async (e) => {
-                        if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-                            const buffer = await e.data.arrayBuffer();
-                            // Note: Realistically, you want raw PCM here. If using MediaRecorder, 
-                            // you might need an AudioWorklet for raw PCM. For this hackathon 
-                            // demo, we are relying on the backend to handle the byte stream.
-                            const base64Audio = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-                            ws.send(JSON.stringify({ type: "audio", data: base64Audio }));
-                        }
-                    };
-                    mediaRecorder.start(100); // Send audio chunks every 100ms
 
-                    // 4. Start capturing video frames (1 frame per second to save bandwidth)
                     const canvas = document.createElement("canvas");
                     const ctx = canvas.getContext("2d");
                     videoInterval = setInterval(() => {
@@ -142,16 +123,13 @@
                     }, 1000); 
                 };
 
-                // 5. Handle incoming data from Python
                 ws.onmessage = async (event) => {
                     try {
                         const message = JSON.parse(event.data);
                         
                         if (message.type === "audio") {
-                            // Bulletproof Little-Endian PCM parsing
                             const binaryString = window.atob(message.data);
-                            const len = binaryString.length;
-                            const validLen = len - (len % 2); 
+                            const validLen = binaryString.length - (binaryString.length % 2); 
                             const floatArray = new Float32Array(validLen / 2);
             
                             for (let i = 0; i < validLen / 2; i++) {
@@ -162,34 +140,25 @@
                                 floatArray[i] = int16 / 32768.0; 
                             }
             
-                            const audioBuffer = audioCtx.createBuffer(1, floatArray.length, 16000);
+                            const audioBuffer = audioCtx.createBuffer(1, floatArray.length, 24000);
                             audioBuffer.copyToChannel(floatArray, 0);
                             
                             const source = audioCtx.createBufferSource();
                             source.buffer = audioBuffer;
                             source.connect(audioCtx.destination);
                             
-                            // Audio Queue to prevent popping
                             const currentTime = audioCtx.currentTime;
-                            if (nextPlayTime < currentTime) {
-                                nextPlayTime = currentTime;
-                            }
+                            if (nextPlayTime < currentTime) nextPlayTime = currentTime;
                             source.start(nextPlayTime);
                             nextPlayTime += audioBuffer.duration;
                             
                         } else if (message.type === "status") {
-                            // Highlights tool calls (e.g., "Searching manuals...")
+                            // THE FIX: Do not let "Connected" overwrite an active Error message
+                            if (statusText.innerText.includes("Error") && !message.data.includes("Error")) return;
+                            
                             statusText.innerText = message.data;
-                            if(message.data.includes("Error") || message.data.includes("Dropped")) {
-                                statusText.classList.replace('text-green-400', 'text-red-400');
-                            } else if (message.data.includes("Searching")) {
-                                statusText.classList.replace('text-green-400', 'text-yellow-400');
-                            } else {
-                                statusText.classList.replace('text-yellow-400', 'text-green-400');
-                                statusText.classList.replace('text-red-400', 'text-green-400');
-                            }
+                            if (message.data.includes("Error")) statusText.classList.replace('text-green-400', 'text-red-400');
                         } else if (message.type === "text") {
-                            // Displays what Gemini is saying
                             geminiText.innerText = `"${message.data}"`;
                         }
                     } catch (err) {
@@ -198,8 +167,11 @@
                 };
 
                 ws.onclose = () => {
-                    statusText.innerText = "Call Dropped (Server Disconnected)";
-                    statusText.classList.replace('text-green-400', 'text-red-400');
+                    // THE FIX: Keep the exact error frozen on screen!
+                    if (!statusText.innerText.includes("Error")) {
+                        statusText.innerText = "Call Dropped (Server Disconnected)";
+                        statusText.classList.replace('text-green-400', 'text-red-400');
+                    }
                     cleanupSession();
                 };
 
@@ -209,7 +181,8 @@
         }
 
         function cleanupSession() {
-            if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+            if (micProcessor) micProcessor.disconnect();
+            if (micSource) micSource.disconnect();
             if (videoInterval) clearInterval(videoInterval);
             if (ws && ws.readyState === WebSocket.OPEN) ws.close();
             
@@ -221,8 +194,6 @@
 
         startBtn.addEventListener('click', startSession);
         stopBtn.addEventListener('click', cleanupSession);
-
-        // Init camera on load
         setupCamera();
     </script>
 </body>
