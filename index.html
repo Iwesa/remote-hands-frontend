@@ -81,7 +81,7 @@
 
                     // Capture mic at the phone's NATIVE rate (don't force 16k, let the browser decide)
                     const audioStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
-                    const micAudioCtx = new AudioContext(); 
+                    const micAudioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 }); 
                     const actualRate = micAudioCtx.sampleRate; // Grab the true hardware rate
                     
                     micSource = micAudioCtx.createMediaStreamSource(audioStream);
