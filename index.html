@@ -17,11 +17,11 @@
         
         <video id="videoElement" autoplay playsinline class="w-full h-80 object-cover"></video>
         
-        <div class="absolute top-0 left-0 w-full bg-black bg-opacity-60 p-2 text-center text-xs font-mono text-green-400 border-b border-gray-700 transition-all duration-300" id="statusText">
+        <div class="absolute top-0 left-0 w-full bg-black bg-opacity-70 p-2 text-center text-xs font-mono text-green-400 border-b border-gray-700 transition-all duration-300" id="statusText">
             System Standby
         </div>
 
-        <div class="absolute bottom-0 left-0 w-full bg-gradient-to-t from-black to-transparent pt-12 pb-4 px-4 text-center text-sm font-medium text-gray-100 italic" id="geminiText">
+        <div class="absolute bottom-0 left-0 w-full bg-gradient-to-t from-black to-transparent pt-12 pb-4 px-4 text-center text-sm font-medium text-gray-100 italic drop-shadow-md" id="geminiText">
             Agent output will appear here...
         </div>
     </div>
@@ -44,18 +44,18 @@
 
         let ws = null;
         let audioCtx = null;
-        let mediaRecorder = null;
         let videoInterval = null;
         let nextPlayTime = 0;
         let micProcessor = null;
         let micSource = null;
         let isManualDisconnect = false;
 
+        // Force Rear Camera for inspecting equipment
         async function setupCamera() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ 
                     video: { facingMode: "environment", width: 640, height: 480 },
-                    audio: false
+                    audio: false 
                 });
                 videoElement.srcObject = stream;
             } catch (err) {
@@ -66,11 +66,14 @@
 
         async function startSession() {
             try {
-                isManualDisconnect = false;
+                isManualDisconnect = false; 
+
+                // Gemini natively outputs at 24000Hz.
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
                 await audioCtx.resume();
                 nextPlayTime = 0;
 
+                // 🚨 REPLACE THIS URL IF YOUR CLOUD RUN URL CHANGED 🚨
                 ws = new WebSocket("wss://remote-hands-backend-920423859996.us-central1.run.app/ws");
 
                 ws.onopen = async () => {
@@ -80,10 +83,9 @@
                     startBtn.classList.add('opacity-50', 'cursor-not-allowed');
                     stopBtn.classList.remove('opacity-50', 'cursor-not-allowed');
 
-                    // Capture mic at the phone's NATIVE rate (don't force 16k, let the browser decide)
+                    // Raw 16kHz PCM Capture for Gemini's ears
                     const audioStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
                     const micAudioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 }); 
-                    const actualRate = micAudioCtx.sampleRate; // Grab the true hardware rate
                     
                     micSource = micAudioCtx.createMediaStreamSource(audioStream);
                     micProcessor = micAudioCtx.createScriptProcessor(4096, 1, 1);
@@ -101,16 +103,15 @@
                             
                             const uint8 = new Uint8Array(pcm16.buffer);
                             let binary = '';
-                            // Chunked base64 processing to prevent stack overflows on mobile
                             for (let i = 0; i < uint8.byteLength; i+=1024) {
                                 binary += String.fromCharCode.apply(null, uint8.subarray(i, i+1024));
                             }
                             
-                            // Send the exact hardware sample rate to Python!
-                            ws.send(JSON.stringify({ type: "audio", rate: actualRate, data: window.btoa(binary) }));
+                            ws.send(JSON.stringify({ type: "audio", data: window.btoa(binary) }));
                         }
                     };
 
+                    // Send video frame every 1 second
                     const canvas = document.createElement("canvas");
                     const ctx = canvas.getContext("2d");
                     videoInterval = setInterval(() => {
@@ -154,11 +155,19 @@
                             nextPlayTime += audioBuffer.duration;
                             
                         } else if (message.type === "status") {
-                            // THE FIX: Do not let "Connected" overwrite an active Error message
+                            // Don't let normal status overwrite an active Error
                             if (statusText.innerText.includes("Error") && !message.data.includes("Error")) return;
                             
                             statusText.innerText = message.data;
-                            if (message.data.includes("Error")) statusText.classList.replace('text-green-400', 'text-red-400');
+                            if (message.data.includes("Error")) {
+                                statusText.classList.replace('text-green-400', 'text-red-400');
+                                statusText.classList.replace('text-yellow-400', 'text-red-400');
+                            } else if (message.data.includes("Searching")) {
+                                statusText.classList.replace('text-green-400', 'text-yellow-400');
+                            } else {
+                                statusText.classList.replace('text-yellow-400', 'text-green-400');
+                                statusText.classList.replace('text-red-400', 'text-green-400');
+                            }
                         } else if (message.type === "text") {
                             geminiText.innerText = `"${message.data}"`;
                         }
@@ -169,11 +178,10 @@
 
                 ws.onclose = () => {
                     if (isManualDisconnect) {
-                        // You pressed the button
                         statusText.innerText = "Session Ended";
                         statusText.classList.replace('text-red-400', 'text-green-400');
+                        statusText.classList.replace('text-yellow-400', 'text-green-400');
                     } else if (!statusText.innerText.includes("Error")) {
-                        // The server crashed
                         statusText.innerText = "Call Dropped (Server Disconnected)";
                         statusText.classList.replace('text-green-400', 'text-red-400');
                     }
@@ -186,26 +194,23 @@
         }
 
         function cleanupSession() {
-            isManualDisconnect = true;
-        
+            isManualDisconnect = true; 
+            
             if (micProcessor) micProcessor.disconnect();
             if (micSource) micSource.disconnect();
             if (videoInterval) clearInterval(videoInterval);
-        
-            if (ws) {
-                ws.close();
-                ws = null;
-            }
-        
+            if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+            
             startBtn.disabled = false;
             stopBtn.disabled = true;
-        
             startBtn.classList.remove('opacity-50', 'cursor-not-allowed');
             stopBtn.classList.add('opacity-50', 'cursor-not-allowed');
         }
 
         startBtn.addEventListener('click', startSession);
         stopBtn.addEventListener('click', cleanupSession);
+        
+        // Initialize camera as soon as the page loads
         setupCamera();
     </script>
 </body>
