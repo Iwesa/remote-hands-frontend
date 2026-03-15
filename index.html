@@ -187,13 +187,19 @@
 
         function cleanupSession() {
             isManualDisconnect = true;
+        
             if (micProcessor) micProcessor.disconnect();
             if (micSource) micSource.disconnect();
             if (videoInterval) clearInterval(videoInterval);
-            if (ws && ws.readyState === WebSocket.OPEN) ws.close();
-            
+        
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        
             startBtn.disabled = false;
             stopBtn.disabled = true;
+        
             startBtn.classList.remove('opacity-50', 'cursor-not-allowed');
             stopBtn.classList.add('opacity-50', 'cursor-not-allowed');
         }
