@@ -49,6 +49,7 @@
         let nextPlayTime = 0;
         let micProcessor = null;
         let micSource = null;
+        let isManualDisconnect = false;
 
         async function setupCamera() {
             try {
@@ -65,7 +66,7 @@
 
         async function startSession() {
             try {
-                // Gemini natively outputs at 24000Hz. Match it for perfect playback!
+                isManualDisconnect = false;
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
                 await audioCtx.resume();
                 nextPlayTime = 0;
@@ -167,8 +168,12 @@
                 };
 
                 ws.onclose = () => {
-                    // THE FIX: Keep the exact error frozen on screen!
-                    if (!statusText.innerText.includes("Error")) {
+                    if (isManualDisconnect) {
+                        // You pressed the button
+                        statusText.innerText = "Session Ended";
+                        statusText.classList.replace('text-red-400', 'text-green-400');
+                    } else if (!statusText.innerText.includes("Error")) {
+                        // The server crashed
                         statusText.innerText = "Call Dropped (Server Disconnected)";
                         statusText.classList.replace('text-green-400', 'text-red-400');
                     }
@@ -181,6 +186,7 @@
         }
 
         function cleanupSession() {
+            isManualDisconnect = true;
             if (micProcessor) micProcessor.disconnect();
             if (micSource) micSource.disconnect();
             if (videoInterval) clearInterval(videoInterval);
