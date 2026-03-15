@@ -45,13 +45,11 @@
         const statusText = document.getElementById('status');
 
         async function startSession() {
+            let nextPlayTime = 0;
             try {
                 // Initialize Audio Context when session starts
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 24000});
-
-                if (audioCtx.state === 'suspended'){
-                    await audioCtx.resume();
-                }
+                await audioCtx.resume();
 
                 // 1. Connect to the FastAPI WebSocket
                 ws = new WebSocket("wss://remote-hands-backend-920423859996.us-central1.run.app/ws");
@@ -95,9 +93,16 @@
                             const source = audioCtx.createBufferSource();
                             source.buffer = audioBuffer;
                             source.connect(audioCtx.destination);
-                            source.start();
+                            const currentTime = audioCtx.currentTime;
+                            if (nextPlayTime < currentTime){
+                                nextPlayTime = currentTime;
+                            }
+                            source.start(nextPlayTime);
+                            nextPlayTime += audioBuffer.duration;
                         } else if (message.type === 'status') {
                             document.getElementById('status').innerText = message.data;
+                        } else if (message.type === 'text'){
+                            statusText.innerText = `Gemini: ${message.data}`;
                         }
                     } catch (err) {
                         statusText.innerText = `Audio Error: ${err.message}`
