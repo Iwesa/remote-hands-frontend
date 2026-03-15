@@ -63,12 +63,14 @@
                         // Play the base64 audio data returned by Gemini
                         const audio = new Audio("data:audio/mp3;base64," + message.data);
                         audio.play();
+                    } else if (message.type === "status"){
+                        document.getElementById('status').innerText=message.data
                     }
                 };
 
                 // 2. Request Camera & Mic permissions
                 const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: true, // Prioritize rear camera for "Remote Hands"
+                    video: {facingMode: {ideal: 'environment'}}, // Prioritize rear camera for "Remote Hands"
                     audio: true 
                 });
 
@@ -83,7 +85,7 @@
                         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
                         // Get base64 JPEG (stripping the data URI prefix)
-                        const base64Image = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+                        const base64Image = canvas.toDataURL('image/jpeg', 0.4).split(',')[1];
 
                         ws.send(JSON.stringify({
                             realtime_input: {
