@@ -79,10 +79,41 @@
                     startBtn.classList.add('opacity-50', 'cursor-not-allowed');
                     stopBtn.classList.remove('opacity-50', 'cursor-not-allowed');
 
-                    // 3. Start capturing microphone (Mono, 16kHz)
+                    // 3. Start capturing microphone (True 16kHz PCM)
                     const audioStream = await navigator.mediaDevices.getUserMedia({ 
                         audio: { channelCount: 1, sampleRate: 16000 } 
                     });
+                    
+                    // Create a separate context to process the microphone input
+                    const micAudioCtx = new AudioContext({ sampleRate: 16000 });
+                    const source = micAudioCtx.createMediaStreamSource(audioStream);
+                    
+                    // Manually intercept the audio nodes to get raw data
+                    const processor = micAudioCtx.createScriptProcessor(4096, 1, 1);
+                    source.connect(processor);
+                    processor.connect(micAudioCtx.destination);
+                    
+                    processor.onaudioprocess = (e) => {
+                        if (ws.readyState === WebSocket.OPEN) {
+                            const inputData = e.inputBuffer.getChannelData(0);
+                            const pcm16 = new Int16Array(inputData.length);
+                            
+                            // Convert browser's Float32 audio to Gemini's required Int16 audio
+                            for (let i = 0; i < inputData.length; i++) {
+                                let s = Math.max(-1, Math.min(1, inputData[i]));
+                                pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                            }
+                            
+                            // Convert raw Int16 bytes to Base64 to send to Python
+                            const uint8 = new Uint8Array(pcm16.buffer);
+                            let binary = '';
+                            for (let i = 0; i < uint8.byteLength; i++) {
+                                binary += String.fromCharCode(uint8[i]);
+                            }
+                            
+                            ws.send(JSON.stringify({ type: "audio", data: window.btoa(binary) }));
+                        }
+                    };
                     
                     mediaRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm;codecs=opus' });
                     mediaRecorder.ondataavailable = async (e) => {
