@@ -49,17 +49,26 @@
                 // 1. Connect to the FastAPI WebSocket
                 ws = new WebSocket("wss://remote-hands-backend-920423859996.us-central1.run.app/ws");
 
+                // Initialize Audio Context when session starts
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 24000});
+
+                if (audioCtx.state === 'suspended'){
+                    await audioCtx.resume();
+                }
+
+
                 ws.onopen = () => {
                     statusText.innerText = "Connected to Gemini Live";
                     startBtn.disabled = true;
                     stopBtn.disabled = false;
                     startBtn.classList.add('opacity-50', 'cursor-not-allowed');
                     stopBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+
+                    ws.send(JSON.stringify({
+                        realtime_input: "Hello! I just connected. Please introduce yourself out loud and tell me you are ready to troubleshoot my surveying equipment"
+                    }))
                 };
-
-                // Initialize Audio Context when session starts
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 24000});
-
+                
                 // Handle incoming audio from Gemini (Conceptual playback)
                 ws.onmessage = async (event) => {
                     const message = JSON.parse(event.data);
@@ -74,7 +83,8 @@
                         }
 
                         // Convert 16-bit PCM to Float32 for the Web Audio API
-                        const buffer = new Int16Array(bytes.buffer);
+                        const bufferLength = Math.floor(len / 2);
+                        const buffer = new Int16Array(bytes.buffer, 0, bufferLength);
                         const audioBuffer = audioCtx.createBuffer(1, buffer.length, 24000);
                         const channelData = audioBuffer.getChannelData(0);
                         for (let i = 0; i < buffer.length; i++){
@@ -87,7 +97,7 @@
                         source.connect(audioCtx.destination);
                         source.start();
                     } else if (message.type === 'status') {
-                        document.getElementBy
+                        document.getElementById('status').innerText = message.data;
                     }
                 };
 
