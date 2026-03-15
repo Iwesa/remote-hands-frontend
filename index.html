@@ -2,185 +2,197 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>The Remote Hands - Live Agent</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>The Remote Hands - Field Agent</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen p-4">
+<body class="bg-gray-900 text-white min-h-screen flex flex-col items-center p-4 font-sans">
 
-    <div class="max-w-md w-full bg-gray-800 rounded-xl shadow-lg p-6 space-y-4">
-        <h1 class="text-2xl font-bold text-center text-blue-400">The Remote Hands</h1>
-
-        <div class="relative w-full aspect-video bg-black rounded-lg overflow-hidden">
-            <video id="videoElement" autoplay playsinline muted class="w-full h-full object-cover"></video>
+    <div class="w-full max-w-md text-center mt-4 mb-6">
+        <h1 class="text-2xl font-bold text-blue-400">The Remote Hands</h1>
+        <p class="text-xs text-gray-400">High-Precision Troubleshooting Agent</p>
+    </div>
+    
+    <div class="w-full max-w-md bg-black rounded-xl overflow-hidden border border-gray-700 relative shadow-2xl">
+        
+        <video id="videoElement" autoplay playsinline class="w-full h-80 object-cover"></video>
+        
+        <div class="absolute top-0 left-0 w-full bg-black bg-opacity-60 p-2 text-center text-xs font-mono text-green-400 border-b border-gray-700 transition-all duration-300" id="statusText">
+            System Standby
         </div>
 
-        <canvas id="canvasElement" class="hidden"></canvas>
-
-        <div class="flex justify-center space-x-4">
-            <button id="startBtn" class="bg-blue-600 hover:bg-blue-500 px-6 py-2 rounded-lg font-semibold transition">
-                Start Session
-            </button>
-            <button id="stopBtn" disabled class="bg-red-600 hover:bg-red-500 px-6 py-2 rounded-lg font-semibold transition opacity-50 cursor-not-allowed">
-                Stop
-            </button>
+        <div class="absolute bottom-0 left-0 w-full bg-gradient-to-t from-black to-transparent pt-12 pb-4 px-4 text-center text-sm font-medium text-gray-100 italic" id="geminiText">
+            Agent output will appear here...
         </div>
+    </div>
 
-        <p id="status" class="text-center text-sm text-gray-400">Disconnected</p>
+    <div class="flex gap-4 mt-8 w-full max-w-md">
+        <button id="startBtn" class="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl font-bold shadow-lg transition-all active:scale-95">
+            Start Session
+        </button>
+        <button id="stopBtn" class="flex-1 bg-red-600 hover:bg-red-500 text-white py-4 rounded-xl font-bold shadow-lg transition-all opacity-50 cursor-not-allowed" disabled>
+            End Session
+        </button>
     </div>
 
     <script>
-        let ws;
-        let videoStream;
-        let audioStream;
-        let mediaRecorder;
-        let frameInterval;
-        let audioCtx
-
-        const video = document.getElementById('videoElement');
-        const canvas = document.getElementById('canvasElement');
-        const ctx = canvas.getContext('2d');
+        const videoElement = document.getElementById('videoElement');
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
-        const statusText = document.getElementById('status');
+        const statusText = document.getElementById('statusText');
+        const geminiText = document.getElementById('geminiText');
+
+        let ws = null;
+        let audioCtx = null;
+        let mediaRecorder = null;
+        let videoInterval = null;
+        let nextPlayTime = 0;
+
+        // Force Rear Camera ("environment")
+        async function setupCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: "environment", width: 640, height: 480 },
+                    audio: false // Handled separately
+                });
+                videoElement.srcObject = stream;
+            } catch (err) {
+                statusText.innerText = "Camera access denied or unavailable";
+                statusText.classList.replace('text-green-400', 'text-red-400');
+            }
+        }
 
         async function startSession() {
-            let nextPlayTime = 0;
             try {
-                // Initialize Audio Context when session starts
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 24000});
+                // 1. Wake up audio instantly to bypass mobile browser blocks
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
                 await audioCtx.resume();
+                nextPlayTime = 0;
 
-                // 1. Connect to the FastAPI WebSocket
+                // 2. Connect to the fully-fixed Python Backend (Update URL if needed!)
                 ws = new WebSocket("wss://remote-hands-backend-920423859996.us-central1.run.app/ws");
 
-                ws.onopen = () => {
-                    statusText.innerText = "Connected to Gemini Live";
+                ws.onopen = async () => {
+                    statusText.innerText = "Connecting to Satellite Link...";
                     startBtn.disabled = true;
                     stopBtn.disabled = false;
                     startBtn.classList.add('opacity-50', 'cursor-not-allowed');
                     stopBtn.classList.remove('opacity-50', 'cursor-not-allowed');
 
-                    // ws.send(JSON.stringify({
-                    //     realtime_input: "Hello! I just connected. Please introduce yourself out loud and tell me you are ready to troubleshoot my surveying equipment"
-                    // }))
+                    // 3. Start capturing microphone (Mono, 16kHz)
+                    const audioStream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: { channelCount: 1, sampleRate: 16000 } 
+                    });
+                    
+                    mediaRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm;codecs=opus' });
+                    mediaRecorder.ondataavailable = async (e) => {
+                        if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+                            const buffer = await e.data.arrayBuffer();
+                            // Note: Realistically, you want raw PCM here. If using MediaRecorder, 
+                            // you might need an AudioWorklet for raw PCM. For this hackathon 
+                            // demo, we are relying on the backend to handle the byte stream.
+                            const base64Audio = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+                            ws.send(JSON.stringify({ type: "audio", data: base64Audio }));
+                        }
+                    };
+                    mediaRecorder.start(100); // Send audio chunks every 100ms
+
+                    // 4. Start capturing video frames (1 frame per second to save bandwidth)
+                    const canvas = document.createElement("canvas");
+                    const ctx = canvas.getContext("2d");
+                    videoInterval = setInterval(() => {
+                        if (ws.readyState === WebSocket.OPEN && videoElement.videoWidth) {
+                            canvas.width = videoElement.videoWidth;
+                            canvas.height = videoElement.videoHeight;
+                            ctx.drawImage(videoElement, 0, 0);
+                            const base64Image = canvas.toDataURL("image/jpeg", 0.5).split(",")[1];
+                            ws.send(JSON.stringify({ type: "video", data: base64Image }));
+                        }
+                    }, 1000); 
                 };
 
-                ws.onclose = () => {
-                    statusText.innerText = "Call Dropped (Server Disconnected)";
-                };
-                
-                // Handle incoming audio from Gemini (Conceptual playback)
+                // 5. Handle incoming data from Python
                 ws.onmessage = async (event) => {
                     try {
                         const message = JSON.parse(event.data);
-
-                        if (message.type === 'audio'){
-                            // Decode base64 to raw bytes
+                        
+                        if (message.type === "audio") {
+                            // Bulletproof Little-Endian PCM parsing
                             const binaryString = window.atob(message.data);
                             const len = binaryString.length;
-                            const bytes = new Uint8Array(len);
-                            for (let i = 0; i < len; i++) {
-                                bytes[i] = binaryString.charCodeAt(i);
+                            const validLen = len - (len % 2); 
+                            const floatArray = new Float32Array(validLen / 2);
+            
+                            for (let i = 0; i < validLen / 2; i++) {
+                                const byte1 = binaryString.charCodeAt(i * 2);
+                                const byte2 = binaryString.charCodeAt(i * 2 + 1);
+                                let int16 = byte1 | (byte2 << 8);
+                                if (int16 & 0x8000) int16 |= 0xFFFF0000; 
+                                floatArray[i] = int16 / 32768.0; 
                             }
-    
-                            // Convert 16-bit PCM to Float32 for the Web Audio API
-                            const bufferLength = Math.floor(len / 2);
-                            const buffer = new Int16Array(bytes.buffer, 0, bufferLength);
-                            const audioBuffer = audioCtx.createBuffer(1, buffer.length, 24000);
-                            const channelData = audioBuffer.getChannelData(0);
-                            for (let i = 0; i < buffer.length; i++){
-                                channelData[i] = buffer[i] / 32768.0;
-                            }
-    
-                            // Play it out loud
+            
+                            const audioBuffer = audioCtx.createBuffer(1, floatArray.length, 16000);
+                            audioBuffer.copyToChannel(floatArray, 0);
+                            
                             const source = audioCtx.createBufferSource();
                             source.buffer = audioBuffer;
                             source.connect(audioCtx.destination);
+                            
+                            // Audio Queue to prevent popping
                             const currentTime = audioCtx.currentTime;
-                            if (nextPlayTime < currentTime){
+                            if (nextPlayTime < currentTime) {
                                 nextPlayTime = currentTime;
                             }
                             source.start(nextPlayTime);
                             nextPlayTime += audioBuffer.duration;
-                        } else if (message.type === 'status') {
-                            document.getElementById('status').innerText = message.data;
-                        } else if (message.type === 'text'){
-                            statusText.innerText = `Gemini: ${message.data}`;
+                            
+                        } else if (message.type === "status") {
+                            // Highlights tool calls (e.g., "Searching manuals...")
+                            statusText.innerText = message.data;
+                            if(message.data.includes("Error") || message.data.includes("Dropped")) {
+                                statusText.classList.replace('text-green-400', 'text-red-400');
+                            } else if (message.data.includes("Searching")) {
+                                statusText.classList.replace('text-green-400', 'text-yellow-400');
+                            } else {
+                                statusText.classList.replace('text-yellow-400', 'text-green-400');
+                                statusText.classList.replace('text-red-400', 'text-green-400');
+                            }
+                        } else if (message.type === "text") {
+                            // Displays what Gemini is saying
+                            geminiText.innerText = `"${message.data}"`;
                         }
                     } catch (err) {
-                        statusText.innerText = `Audio Error: ${err.message}`
+                        console.error("Parse error:", err);
                     }
                 };
 
-                // 2. Request Camera & Mic permissions
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: {facingMode: {ideal: 'environment'}}, // Prioritize rear camera for "Remote Hands"
-                    audio: true 
-                });
-
-                video.srcObject = stream;
-                videoStream = stream;
-
-                // 3. Extract and send Video Frames (1 FPS to avoid rate limits)
-                frameInterval = setInterval(() => {
-                    if (ws.readyState === WebSocket.OPEN) {
-                        canvas.width = video.videoWidth;
-                        canvas.height = video.videoHeight;
-                        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-                        // Get base64 JPEG (stripping the data URI prefix)
-                        const base64Image = canvas.toDataURL('image/jpeg', 0.4).split(',')[1];
-
-                        ws.send(JSON.stringify({
-                            realtime_input: {
-                                mime_type: "image/jpeg",
-                                data: base64Image
-                            }
-                        }));
-                    }
-                }, 1000); // 1 frame per second
-
-                // 4. Capture and send Audio Chunks
-                mediaRecorder = new MediaRecorder(stream);
-                mediaRecorder.ondataavailable = async (e) => {
-                    if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-                        const buffer = await e.data.arrayBuffer();
-                        // Convert ArrayBuffer to Base64
-                        const base64Audio = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-
-                        ws.send(JSON.stringify({
-                            realtime_input: {
-                                mime_type: "audio/webm", // Note: Backend may need to transcode to PCM depending on strictness
-                                data: base64Audio
-                            }
-                        }));
-                    }
+                ws.onclose = () => {
+                    statusText.innerText = "Call Dropped (Server Disconnected)";
+                    statusText.classList.replace('text-green-400', 'text-red-400');
+                    cleanupSession();
                 };
-                mediaRecorder.start(500); // Send an audio chunk every 500ms
 
             } catch (err) {
-                console.error("Error accessing media devices.", err);
-                statusText.innerText = "Error accessing camera/mic.";
-                alert(`Camera/Mic Error: ${err.name} - ${err.message}`);
+                statusText.innerText = `Setup Error: ${err.message}`;
             }
         }
 
-        function stopSession() {
-            if (ws) ws.close();
-            if (videoStream) videoStream.getTracks().forEach(track => track.stop());
-            clearInterval(frameInterval);
-            if (mediaRecorder) mediaRecorder.stop();
-
-            statusText.innerText = "Disconnected";
+        function cleanupSession() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+            if (videoInterval) clearInterval(videoInterval);
+            if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+            
             startBtn.disabled = false;
             stopBtn.disabled = true;
-            stopBtn.classList.add('opacity-50', 'cursor-not-allowed');
             startBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            stopBtn.classList.add('opacity-50', 'cursor-not-allowed');
         }
 
         startBtn.addEventListener('click', startSession);
-        stopBtn.addEventListener('click', stopSession);
+        stopBtn.addEventListener('click', cleanupSession);
+
+        // Init camera on load
+        setupCamera();
     </script>
 </body>
 </html>
